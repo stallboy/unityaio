@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Aio
 {
@@ -282,6 +283,7 @@ namespace Aio
             return 0 == CompareTo(other);
         }
 
+        [SuppressMessage("ReSharper", "NonReadonlyMemberInGetHashCode")] //be careful
         public override int GetHashCode()
         {
             var result = 1;
