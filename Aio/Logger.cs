@@ -25,11 +25,11 @@ namespace Aio
 
         private string _identification = "null";
 
-        public Logger(string remoteIp, int remotePort, bool enableUdpLogger)
+        public Logger(string remoteIp, int remotePort, bool enable)
         {
             _sender = new UdpClient();
             _remoteEp = new IPEndPoint(IPAddress.Parse(remoteIp), remotePort);
-            Enable = enableUdpLogger;
+            Enable = enable;
         }
 
         public void Process(long maxMilliseconds)
