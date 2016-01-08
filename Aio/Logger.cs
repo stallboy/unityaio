@@ -7,31 +7,29 @@ using System.Text;
 
 namespace Aio
 {
-    
     public sealed class Logger
     {
-        public delegate void LoggerExceptionHandler(string msg, Exception e);
+        public delegate void ErrorHandler(string message, Exception e = null);
 
-        public delegate void UdpQueueOverflowHandler(string rolename, String msg);
-
-        public bool EnableUdpLogger { get; set; }
-        public LoggerExceptionHandler OnException { get; set; }
-        public UdpQueueOverflowHandler OnUdpQueueOverflow { get; set; }
+        public ErrorHandler OnError { get; set; }
+        public bool Enable { get; set; }
 
         private readonly UdpClient _sender;
         private readonly IPEndPoint _remoteEp;
-        private readonly ConcurrentQueue<IoAction> _actions = new ConcurrentQueue<IoAction>();
+        private readonly ConcurrentQueue<IoAction> _ioactions = new ConcurrentQueue<IoAction>();
         private readonly Stopwatch _frameWatcher = new Stopwatch();
-        private readonly List<string> _secondChanceList = new List<string>();
- 
-        private int _maxUdpQueueCount = 512;
-        private int _secondChanceCapacity = 512;
-        
-        public Logger(String remoteIp, int remotePort, bool enableUdpLogger)
+        private readonly Queue<string> _retrys = new Queue<string>(RetryCapacity);
+
+        private const int ActionCapacity = 256;
+        private const int RetryCapacity = 128;
+
+        private string _identification = "null";
+
+        public Logger(string remoteIp, int remotePort, bool enableUdpLogger)
         {
             _sender = new UdpClient();
             _remoteEp = new IPEndPoint(IPAddress.Parse(remoteIp), remotePort);
-            EnableUdpLogger = enableUdpLogger;
+            Enable = enableUdpLogger;
         }
 
         public void Process(long maxMilliseconds)
@@ -41,7 +39,7 @@ namespace Aio
             while (_frameWatcher.ElapsedMilliseconds < maxMilliseconds)
             {
                 IoAction action;
-                if (_actions.TryDequeue(out action))
+                if (_ioactions.TryDequeue(out action))
                 {
                     action();
                 }
@@ -52,110 +50,83 @@ namespace Aio
             }
         }
 
-        public void Log(string rolename, string s)
+        public void SetIdentification(string identification)
         {
-            LogError(rolename, s, null);
-        }
-        
-        public void LogError(string rolename, string s, Exception e)
-        {
-            if (!EnableUdpLogger)
-            {
-                return;
-            }
-            var sb = new StringBuilder();
-            if (s != null)
-            {
-                sb.Append(s);
-            }
-            if (e != null)
-            {
-                if (sb.Length > 0)
-                {
-                    sb.Append(" ");
-                }
-                sb.Append(e);
-            }
-            DoLog(rolename, sb.ToString());
+            _identification = identification == null ? "null" : identification;
         }
 
-        
-        public void Close() 
+        public void Log(string message, Exception exception = null)
+        {
+            if (!Enable)
+                return;
+
+            var sb = new StringBuilder();
+            sb.Append(_identification).Append("@").Append(DateTime.Now.ToString("HH:mm:ss"))
+                .Append("@").Append(message).Append("@").Append(exception);
+            var msg = sb.ToString();
+
+            Enqueue(msg, true);
+        }
+
+        public void Close()
         {
             _sender.Close();
         }
 
-
-
-        private void DoLog(string rolename, string msg)
+        private void Enqueue(string msg, bool firstTry)
         {
-            if (EnableUdpLogger)
+            if (_ioactions.Count < ActionCapacity)
             {
-                if (_actions.Count > _maxUdpQueueCount)
-                {
-                    if (OnUdpQueueOverflow != null)
-                    {
-                        OnUdpQueueOverflow(rolename, msg);
-                    }
-                }
-                else
-                {
-                    _actions.Enqueue(() => DoSend(rolename + "@" + msg + "@" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), true));
-                }
+                _ioactions.Enqueue(() => DoSend(msg, firstTry));
+            }
+            else if (OnError != null)
+            {
+                OnError(msg);
             }
         }
 
-        private void DoSend(string str, bool firstTime)
+        private void DoSend(string msg, bool firstTry)
         {
             try
             {
-                byte[] bytes = Encoding.UTF8.GetBytes(str);
-                _sender.Connect(_remoteEp);
-                _sender.BeginSend(bytes, bytes.Length, ar =>
+                byte[] bytes = Encoding.UTF8.GetBytes(msg);
+                _sender.BeginSend(bytes, bytes.Length, _remoteEp, ar => _ioactions.Enqueue(() =>
                 {
                     try
                     {
                         _sender.EndSend(ar);
-
-                        foreach (var s in _secondChanceList)
+                        var re = _retrys.GetEnumerator();
+                        while (re.MoveNext())
                         {
-                            var second = s;
-                             _actions.Enqueue(() => DoSend(second, false));
+                            Enqueue(re.Current, false);
                         }
-                        _secondChanceList.Clear();
+                        _retrys.Clear();
                     }
-                    catch (Exception e)
+                    catch (Exception)
                     {
-                        GiveSecondChance(str, e, firstTime);
+                        // ignored
                     }
-                }, null);
+                }), null);
             }
             catch (Exception e)
             {
-                GiveSecondChance(str, e, firstTime);
-            }
-        }
-
-        private void GiveSecondChance(string str, Exception cause, bool firstTime)
-        {
-            if (firstTime)
-            {
-                _secondChanceList.Add(str);
-                if (_secondChanceList.Count > _secondChanceCapacity)
+                if (firstTry)
                 {
-                    _secondChanceList.RemoveAt(0);
+                    if (_retrys.Count >= RetryCapacity)
+                    {
+                        var firstMsg = _retrys.Dequeue();
+                        if (OnError != null)
+                        {
+                            OnError(firstMsg);
+                        }
+                    }
+                    _retrys.Enqueue(msg);
                 }
-            }
-            else
-            {
-                if (OnException != null)
+                else if (OnError != null)
                 {
-                    OnException(str, cause);
+                    OnError(msg, e);
                 }
             }
         }
-
-
     }
-
 }

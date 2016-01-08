@@ -350,18 +350,7 @@ namespace Aio
                 Connect();
             }
 
-            while (_frameWatcher.ElapsedMilliseconds < maxMilliseconds)
-            {
-                IoAction ioAction;
-                if (_actions.TryDequeue(out ioAction))
-                {
-                    ioAction();
-                }
-                else
-                {
-                    break;
-                }
-            }
+            DoIo(maxMilliseconds);
 
             while (_frameWatcher.ElapsedMilliseconds < maxMilliseconds)
             {
@@ -380,6 +369,11 @@ namespace Aio
         }
 
         public void LateProcess(long maxMilliseconds)
+        {
+            DoIo(maxMilliseconds);
+        }
+
+        private void DoIo(long maxMilliseconds)
         {
             while (_frameWatcher.ElapsedMilliseconds < maxMilliseconds)
             {
