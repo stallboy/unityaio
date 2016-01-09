@@ -95,12 +95,12 @@ namespace Aio
                     try
                     {
                         _sender.EndSend(ar);
-                        var re = _retrys.GetEnumerator();
-                        while (re.MoveNext())
+                        
+                        while (_ioactions.Count < ActionCapacity)
                         {
-                            Enqueue(re.Current, false);
+                            var re = _retrys.Dequeue();
+                            _ioactions.Enqueue(() => DoSend(re, false));
                         }
-                        _retrys.Clear();
                     }
                     catch (Exception)
                     {
@@ -114,10 +114,10 @@ namespace Aio
                 {
                     if (_retrys.Count >= RetryCapacity)
                     {
-                        var firstMsg = _retrys.Dequeue();
+                        var firstRetryMsg = _retrys.Dequeue();
                         if (OnError != null)
                         {
-                            OnError(firstMsg);
+                            OnError(firstRetryMsg);
                         }
                     }
                     _retrys.Enqueue(msg);
